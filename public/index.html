@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>NyumbaFind – Find your next home</title>
+<meta name="theme-color" content="#2f6f8f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="NyumbaFind">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" type="image/svg+xml" href="/logo/icon.svg">
+<link rel="apple-touch-icon" href="/logo/png/apple-touch-icon.png">
+<link rel="stylesheet" href="/css/styles.css">
+</head><body>
+<header>
+    <div class="logo" onclick="go('home')" aria-label="NyumbaFind home">
+        <img class="lg-l" src="/logo/logo-header.svg" alt="NyumbaFind" height="34">
+        <img class="lg-d" src="/logo/logo-header-light.svg" alt="" height="34">
+    </div>
+        <div id="nav"></div>
+        <button id="install-app" class="btn" onclick="openInstallPopup()" hidden>Get the app</button>
+        <button class="btn g" onclick="theme()" title="Theme">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M20 14A8 8 0 1110 4a6.5 6.5 0 0010 10z"/>
+            </svg>
+        </button>
+        <button class="menu-btn btn g" onclick="document.body.classList.toggle('menu')" aria-label="Menu">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                <path d="M4 7h16M4 12h16M4 17h16"/>
+            </svg>
+        </button>
+        <div class="ov" onclick="closeMenu()"></div>
+    </header>
+<div id="hero"></div>
+<main id="app"><div class="empty">Loading…</div></main>
+<div id="ft" style="max-width:1150px;margin:0 auto;padding:0 16px"></div>
+<script src="/js/locations.js"></script>
+<script src="/js/app.js"></script>
+</body></html>
