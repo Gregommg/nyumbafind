@@ -23,11 +23,11 @@ async function ipnId(appUrl) {
   await db.query("INSERT INTO settings(key,value) VALUES('pesapal_ipn',$1) ON CONFLICT(key) DO UPDATE SET value=$1", [JSON.stringify({ url, id: d.ipn_id, env: BASE })]);
   return d.ipn_id;
 }
-async function submit({ ref, amount, description, user, appUrl }) {
+async function submit({ ref, amount, description, user, appUrl, phone }) {
   const [first, ...rest] = String(user.name || "Customer").split(" ");
   return call("/Transactions/SubmitOrderRequest", { method: "POST", token: await token(), body: {
     id: ref, currency: "KES", amount, description: description.slice(0, 100), callback_url: appUrl + "/api/pay/return",
-    notification_id: await ipnId(appUrl), billing_address: { email_address: user.email, phone_number: user.phone || "", country_code: "KE", first_name: first, last_name: rest.join(" ") || first } } });
+    notification_id: await ipnId(appUrl), billing_address: { email_address: user.email, phone_number: phone || user.phone || "", country_code: "KE", first_name: first, last_name: rest.join(" ") || first } } });
 }
 async function status(trackingId) { return call("/Transactions/GetTransactionStatus?orderTrackingId=" + encodeURIComponent(trackingId), { token: await token() }); }
-module.exports = { configured, submit, status };
+module.exports = { configured, submit, status, ping: token, registerIpn: ipnId, base: BASE };

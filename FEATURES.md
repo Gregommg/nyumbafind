@@ -24,6 +24,11 @@ Tenants enter their M-Pesa number before paying, and it is sent to Pesapal. On t
 ### Payments not showing up?
 A payment only counts once the server has confirmed it with Pesapal. The site now does this automatically in four ways: when the buyer comes back to the site, when Pesapal sends its notification, every 2 minutes in the background, and whenever the buyer or the admin opens their page. In Admin > Payments you can also press **Recheck pending payments**. Each payment shows the status Pesapal reported, so you can see whether it is still pending or failed. Make sure `APP_URL` is your real public https address, because Pesapal sends its notifications there.
 
+If payments stay pending, open Admin > Payments and:
+1. Press **Test Pesapal connection**. It tells you plainly if the keys are wrong, if `PESAPAL_ENV` does not match your keys (sandbox keys need `sandbox`, live keys need `live`), or if the site address is not public.
+2. Press **Recheck pending payments**. If Pesapal could not be asked, the reason is shown on that payment.
+3. If you can see the payment as Completed in your Pesapal account, press **Mark paid** on that payment to give the buyer what they paid for. Only do this after you have seen the money in Pesapal.
+
 ## 3. Admin dashboard > Payments
 - **Switches per role.** Tenants: payments on/off, pay to see contact and directions, pay to send suggestions. Landlords: payments on/off, pay to see tenant suggestions, paid boosts. Everything is **free until you switch it on**, and posting a house is always free.
 - **Plans and prices.** Add, edit, turn off or delete plans: house view plans (price and how many houses), suggestion subscriptions (price and days) and boosts (price, days, and which of: pin to top, Featured badge, homepage, popular areas). The prices already in there are examples. Change them.

@@ -42,9 +42,12 @@ module.exports = (r, { auth, role, h, bad, db, optUser, getSettings, saveSetting
     const rows = (await db.query(`SELECT ref,tracking_id FROM payments WHERE tracking_id IS NOT NULL AND ($2::int IS NULL OR user_id=$2)
       AND (status='pending' OR (status='failed' AND created_at>now()-interval '2 hours')) AND created_at>now()-($3::int*interval '1 hour')
       AND ($4::boolean OR checked_at IS NULL OR checked_at<now()-interval '45 seconds') ORDER BY created_at DESC LIMIT $1`, [limit, uid, hours, force])).rows;
-    let paid = 0;
-    for (const x of rows) { try { const p = await settle(x.ref, x.tracking_id); if (p && p.status === "paid") paid++; } catch (e) { console.error("Pesapal recheck:", x.ref, e.message); } }
-    return { checked: rows.length, paid };
+    let paid = 0; const errors = [];
+    for (const x of rows) {
+      try { const p = await settle(x.ref, x.tracking_id); if (p && p.status === "paid") paid++; }
+      catch (e) { console.error("Pesapal recheck:", x.ref, e.message); errors.push({ ref: x.ref, message: e.message }); await db.query("UPDATE payments SET note=$2, checked_at=now() WHERE ref=$1", [x.ref, ("Check failed: " + e.message).slice(0, 200)]).catch(() => {}); }
+    }
+    return { checked: rows.length, paid, errors };
   }
   setTimeout(() => reconcile().catch(() => {}), 20000).unref();
   setInterval(() => reconcile().catch(() => {}), 2 * 60 * 1000).unref();
@@ -153,9 +156,29 @@ module.exports = (r, { auth, role, h, bad, db, optUser, getSettings, saveSetting
   r.delete("/admin/products/:id", ...adm, h(async (q, s) => { await db.query("DELETE FROM products WHERE id=$1", [parseInt(q.params.id) || 0]); s.json({ ok: true }); }));
   r.get("/admin/payments", ...adm, h(async (q, s) => {
     await reconcile({ limit: 20, hours: 24 * 14 }).catch(() => {});
-    const x = await db.query("SELECT p.ref,p.amount,p.status,p.note,p.created_at,p.product->>'name' AS plan,u.name,u.email FROM payments p JOIN users u ON u.id=p.user_id ORDER BY p.created_at DESC LIMIT 50");
+    const x = await db.query("SELECT p.ref,p.amount,p.status,p.note,p.tracking_id,p.created_at,p.product->>'name' AS plan,u.name,u.email FROM payments p JOIN users u ON u.id=p.user_id ORDER BY p.created_at DESC LIMIT 50");
     const t = (await db.query("SELECT COALESCE(SUM(amount) FILTER (WHERE status='paid'),0)::int AS total, COUNT(*) FILTER (WHERE status='paid')::int AS paid, COUNT(*) FILTER (WHERE status='pending')::int AS pending, COUNT(*)::int AS all FROM payments")).rows[0];
     s.json({ payments: x.rows, totals: t });
+  }));
+  r.get("/admin/pesapal-test", ...adm, h(async (q, s) => {
+    const out = { env: process.env.PESAPAL_ENV === "live" ? "live" : "sandbox", site: appUrl(q), ipnUrl: appUrl(q) + "/api/pay/ipn" };
+    if (!pesapal.configured()) return s.json({ ...out, ok: false, error: "PESAPAL_CONSUMER_KEY and PESAPAL_CONSUMER_SECRET are not set on the server." });
+    if (/^https?:\/\/(localhost|127\.|0\.0\.0\.0|192\.168\.|10\.)/i.test(out.site) && process.env.PESAPAL_ALLOW_LOCAL !== "1")
+      return s.json({ ...out, ok: false, error: "The site address is a local address. Set APP_URL to your public https address." });
+    try { await pesapal.ping(); await pesapal.registerIpn(out.site); s.json({ ...out, ok: true }); }
+    catch (e) { s.json({ ...out, ok: false, error: e.message + " (check that PESAPAL_ENV matches the type of keys you use: sandbox keys with sandbox, live keys with live)" }); }
+  }));
+  r.post("/admin/payments/:ref/mark-paid", ...adm, h(async (q, s) => {
+    const p = (await db.query("SELECT * FROM payments WHERE ref=$1", [q.params.ref])).rows[0];
+    if (!p) return bad(s, "Payment not found", 404);
+    if (p.status === "paid") return s.json({ ok: true });
+    const c = await db.connect();
+    try {
+      await c.query("BEGIN");
+      const u = await c.query("UPDATE payments SET status='paid',paid_at=now(),note='Marked paid by admin' WHERE ref=$1 AND status<>'paid' RETURNING *", [p.ref]);
+      if (u.rowCount) await applyProduct(c, p.user_id, p.product, p.listing_id);
+      await c.query("COMMIT"); s.json({ ok: true });
+    } catch (e) { await c.query("ROLLBACK").catch(() => {}); throw e; } finally { c.release(); }
   }));
   r.post("/admin/payments/recheck", ...adm, h(async (q, s) => s.json(await reconcile({ limit: 100, hours: 24 * 30, force: true }))));
 
