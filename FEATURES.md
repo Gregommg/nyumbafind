@@ -15,6 +15,15 @@ Set these environment variables (Render > Environment), then redeploy:
 
 The payment notification (IPN) address is registered with Pesapal automatically the first time someone pays. Paying sends the user to Pesapal (M-Pesa, card or bank) and back to your site. Every payment is double-checked with Pesapal before anything is unlocked, and replayed notifications cannot give credit twice.
 
+### Testing on your own computer
+Pesapal must be able to reach your site, so it refuses `localhost` addresses. While testing locally, run a tunnel (for example `ngrok http 3000`), put the https address it gives you in `APP_URL`, restart the server and open the site through that address. Or just test on your deployed Render site.
+
+### M-Pesa STK push
+Tenants enter their M-Pesa number before paying, and it is sent to Pesapal. On the Pesapal page they choose M-Pesa and approve the prompt that appears on their phone.
+
+### Payments not showing up?
+A payment only counts once the server has confirmed it with Pesapal. The site now does this automatically in four ways: when the buyer comes back to the site, when Pesapal sends its notification, every 2 minutes in the background, and whenever the buyer or the admin opens their page. In Admin > Payments you can also press **Recheck pending payments**. Each payment shows the status Pesapal reported, so you can see whether it is still pending or failed. Make sure `APP_URL` is your real public https address, because Pesapal sends its notifications there.
+
 ## 3. Admin dashboard > Payments
 - **Switches per role.** Tenants: payments on/off, pay to see contact and directions, pay to send suggestions. Landlords: payments on/off, pay to see tenant suggestions, paid boosts. Everything is **free until you switch it on**, and posting a house is always free.
 - **Plans and prices.** Add, edit, turn off or delete plans: house view plans (price and how many houses), suggestion subscriptions (price and days) and boosts (price, days, and which of: pin to top, Featured badge, homepage, popular areas). The prices already in there are examples. Change them.

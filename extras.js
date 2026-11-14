@@ -5,6 +5,8 @@ module.exports = (r, { auth, role, h, bad, db, optUser, getSettings, saveSetting
   const FEAT = { view_pack: "views", suggest_sub: "suggest", boost: "boost" };
   const appUrl = q => (process.env.APP_URL || q.protocol + "://" + q.get("host")).replace(/\/$/, "");
   const prodOut = x => ({ id: x.id, kind: x.kind, role: x.role, name: x.name, price: x.price, qty: x.qty, pin: x.pin, badge: x.badge, home: x.home, popular: x.popular, active: x.active });
+  // Kenyan mobile numbers: 0712345678, 712345678 or +254712345678 -> 254712345678
+  const normPhone = x => { const d = String(x || "").replace(/\D/g, ""); if (/^0[17]\d{8}$/.test(d)) return "254" + d.slice(1); if (/^[17]\d{8}$/.test(d)) return "254" + d; if (/^254[17]\d{8}$/.test(d)) return d; return null; };
   const D = x => /^\d{4}-\d{2}-\d{2}$/.test(String(x || "")) && !isNaN(Date.parse(x));
 
   async function applyProduct(c, uid, p, listingId) {
@@ -20,8 +22,11 @@ module.exports = (r, { auth, role, h, bad, db, optUser, getSettings, saveSetting
     if (!p || p.status === "paid") return p;
     const tid = trackingId || p.tracking_id; if (!tid) return p;
     const st = await pesapal.status(tid), d = String(st.payment_status_description || "").toLowerCase();
-    const amountOk = st.amount == null || Number(st.amount) >= p.amount, refOk = !st.merchant_reference || st.merchant_reference === ref;
-    if (d === "completed" && amountOk && refOk) {
+    await db.query("UPDATE payments SET note=$2, checked_at=now(), tracking_id=COALESCE(tracking_id,$3) WHERE ref=$1", [ref, String(st.payment_status_description || st.message || "").slice(0, 80) || null, tid]);
+    const completed = d === "completed" || Number(st.status_code) === 1;
+    const refOk = !st.merchant_reference || String(st.merchant_reference).toLowerCase() === ref.toLowerCase();
+    if (st.amount != null && Number(st.amount) < p.amount) console.warn("Pesapal amount differs for", ref, st.amount, "expected", p.amount);
+    if (completed && refOk) {
       const c = await db.connect();
       try {
         await c.query("BEGIN");
@@ -32,10 +37,22 @@ module.exports = (r, { auth, role, h, bad, db, optUser, getSettings, saveSetting
     } else if (["failed", "invalid", "reversed"].includes(d)) await db.query("UPDATE payments SET status='failed' WHERE ref=$1 AND status='pending'", [ref]);
     return (await db.query("SELECT * FROM payments WHERE ref=$1", [ref])).rows[0];
   }
+  // Re-asks Pesapal about payments we have not heard back on (missed notifications, closed browser, sleeping server).
+  async function reconcile({ limit = 30, uid = null, hours = 24, force = false } = {}) {
+    const rows = (await db.query(`SELECT ref,tracking_id FROM payments WHERE tracking_id IS NOT NULL AND ($2::int IS NULL OR user_id=$2)
+      AND (status='pending' OR (status='failed' AND created_at>now()-interval '2 hours')) AND created_at>now()-($3::int*interval '1 hour')
+      AND ($4::boolean OR checked_at IS NULL OR checked_at<now()-interval '45 seconds') ORDER BY created_at DESC LIMIT $1`, [limit, uid, hours, force])).rows;
+    let paid = 0;
+    for (const x of rows) { try { const p = await settle(x.ref, x.tracking_id); if (p && p.status === "paid") paid++; } catch (e) { console.error("Pesapal recheck:", x.ref, e.message); } }
+    return { checked: rows.length, paid };
+  }
+  setTimeout(() => reconcile().catch(() => {}), 20000).unref();
+  setInterval(() => reconcile().catch(() => {}), 2 * 60 * 1000).unref();
 
   // ---------- public config ----------
   r.get("/config", h(async (q, s) => {
     const u = optUser(q), st = await getSettings();
+    if (u) await reconcile({ limit: 3, uid: u.id }).catch(() => {});
     const products = (await db.query("SELECT * FROM products WHERE active ORDER BY price,id")).rows.map(prodOut);
     let me = null;
     if (u) { const x = (await db.query("SELECT view_credits,suggest_until FROM users WHERE id=$1", [u.id])).rows[0]; me = x && { viewCredits: x.view_credits, suggestUntil: x.suggest_until }; }
@@ -59,9 +76,14 @@ module.exports = (r, { auth, role, h, bad, db, optUser, getSettings, saveSetting
       if (admin) { await applyProduct(db, me.id, p, lid); return s.json({ granted: true }); }
     } else if (admin) return bad(s, "Admins can only grant boosts");
     if (!pesapal.configured()) return bad(s, "Payments are not set up yet. Please try again later.", 503);
+    const site = appUrl(q);
+    if (process.env.PESAPAL_ALLOW_LOCAL !== "1" && /^https?:\/\/(localhost|127\.|0\.0\.0\.0|192\.168\.|10\.)/i.test(site))
+      return bad(s, "Pesapal cannot reach a local address. Set APP_URL to your public https site address (use an ngrok link when testing on your computer) and restart.", 503);
+    const phone = q.body.phone ? normPhone(q.body.phone) : null;
+    if (q.body.phone && !phone) return bad(s, "Enter a valid M-Pesa number, for example 0712345678");
     const ref = "NF" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
     await db.query("INSERT INTO payments(ref,user_id,product,listing_id,amount) VALUES($1,$2,$3,$4,$5)", [ref, me.id, JSON.stringify(prodOut(p)), lid, p.price]);
-    const o = await pesapal.submit({ ref, amount: p.price, description: p.name, user: me, appUrl: appUrl(q) });
+    const o = await pesapal.submit({ ref, amount: p.price, description: p.name, user: me, appUrl: site, phone });
     await db.query("UPDATE payments SET tracking_id=$2 WHERE ref=$1", [ref, o.order_tracking_id]);
     s.json({ redirectUrl: o.redirect_url, ref });
   }));
@@ -103,7 +125,7 @@ module.exports = (r, { auth, role, h, bad, db, optUser, getSettings, saveSetting
 
   // ---------- admin: payment switches, plans, payments ----------
   const adm = [auth, role("admin")];
-  r.get("/admin/payment-settings", ...adm, h(async (q, s) => s.json({ settings: await getSettings(), pesapal: pesapal.configured(), env: process.env.PESAPAL_ENV === "live" ? "live" : "sandbox" })));
+  r.get("/admin/payment-settings", ...adm, h(async (q, s) => s.json({ settings: await getSettings(), pesapal: pesapal.configured(), env: process.env.PESAPAL_ENV === "live" ? "live" : "sandbox", ipn: appUrl(q) + "/api/pay/ipn" })));
   r.put("/admin/payment-settings", ...adm, h(async (q, s) => {
     const t = (q.body || {}).tenant || {}, l = (q.body || {}).landlord || {}, B = x => x === true;
     await saveSettings({ tenant: { enabled: B(t.enabled), views: B(t.views), suggest: B(t.suggest) }, landlord: { enabled: B(l.enabled), suggest: B(l.suggest), boost: B(l.boost) } });
@@ -130,10 +152,12 @@ module.exports = (r, { auth, role, h, bad, db, optUser, getSettings, saveSetting
   }));
   r.delete("/admin/products/:id", ...adm, h(async (q, s) => { await db.query("DELETE FROM products WHERE id=$1", [parseInt(q.params.id) || 0]); s.json({ ok: true }); }));
   r.get("/admin/payments", ...adm, h(async (q, s) => {
-    const x = await db.query("SELECT p.ref,p.amount,p.status,p.created_at,p.product->>'name' AS plan,u.name,u.email FROM payments p JOIN users u ON u.id=p.user_id ORDER BY p.created_at DESC LIMIT 50");
-    const t = (await db.query("SELECT COALESCE(SUM(amount) FILTER (WHERE status='paid'),0)::int AS total, COUNT(*) FILTER (WHERE status='paid')::int AS paid, COUNT(*)::int AS all FROM payments")).rows[0];
+    await reconcile({ limit: 20, hours: 24 * 14 }).catch(() => {});
+    const x = await db.query("SELECT p.ref,p.amount,p.status,p.note,p.created_at,p.product->>'name' AS plan,u.name,u.email FROM payments p JOIN users u ON u.id=p.user_id ORDER BY p.created_at DESC LIMIT 50");
+    const t = (await db.query("SELECT COALESCE(SUM(amount) FILTER (WHERE status='paid'),0)::int AS total, COUNT(*) FILTER (WHERE status='paid')::int AS paid, COUNT(*) FILTER (WHERE status='pending')::int AS pending, COUNT(*)::int AS all FROM payments")).rows[0];
     s.json({ payments: x.rows, totals: t });
   }));
+  r.post("/admin/payments/recheck", ...adm, h(async (q, s) => s.json(await reconcile({ limit: 100, hours: 24 * 30, force: true }))));
 
   // ---------- Airbnb-style stays: search, book, manage ----------
   r.get("/stays/available", h(async (q, s) => {

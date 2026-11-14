@@ -78,3 +78,5 @@ CREATE TABLE IF NOT EXISTS bookings(
   created_at TIMESTAMPTZ NOT NULL DEFAULT now());
 CREATE INDEX IF NOT EXISTS bookings_listing_idx ON bookings(listing_id, status);
 CREATE INDEX IF NOT EXISTS bookings_guest_idx ON bookings(guest_id);
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS note TEXT;
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS checked_at TIMESTAMPTZ;
