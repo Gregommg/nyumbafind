@@ -6,7 +6,9 @@ let tok = null;
 async function call(path, { method = "GET", body, token } = {}) {
   const r = await fetch(BASE + path, { method, headers: { Accept: "application/json", "Content-Type": "application/json", ...(token ? { Authorization: "Bearer " + token } : {}) }, body: body ? JSON.stringify(body) : undefined });
   const d = await r.json().catch(() => ({}));
-  if (!r.ok || d.error) throw Object.assign(new Error((d.error && (d.error.message || d.error.code)) || "Pesapal request failed"), { status: 502 });
+  // Pesapal often sends an "error" object full of nulls on SUCCESS, so only treat it as an error when it carries something.
+  const em = d.error ? (typeof d.error === "string" ? d.error : d.error.message || d.error.code || d.error.error_type) : null;
+  if (!r.ok || em) throw Object.assign(new Error(em || d.message || "Pesapal request failed (HTTP " + r.status + ")"), { status: 502 });
   return d;
 }
 async function token() {
